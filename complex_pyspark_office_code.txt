@@ -1,0 +1,73 @@
+from pyspark.sql import SparkSession
+from pyspark.sql.functions import col, countDistinct, lit
+from pyspark.sql.types import IntegerType
+
+# Assuming you have ansKey_operator_dict containing the question and answer information
+
+merged_df = None
+
+for (Varid, anskey), val in ansKey_operator_dict.items():
+    operators = set(val['operator'])
+    op_Count = len(operators)
+
+    condition_df = Condition_join.filter(
+        (col("VarID") == Varid) & (col("AnswerKey") == anskey) & col("Operator").isin(operators)
+    )
+
+    if op_Count == 1:
+        QdCount = condition_df.select(countDistinct(col("QuestionPrimaryKey"))).first()[0]
+        op_Count = int(QdCount)
+
+    dfs = []
+
+    if "=!" in operators:
+        con_blank_check = condition_df.filter(col("Operator") == "=!").select("VarID", "AnswerKey", "QuestionPrimaryKey", "Value")
+        equal_blank_check_responses = equal_blank_value(con_blank_check, Varid, anskey)
+        dfs.append(equal_blank_check_responses)
+
+    if "=!!" in operators:
+        con_blank_check = condition_df.filter(col("Operator") == "=!!").select("VarID", "AnswerKey", "QuestionPrimaryKey", "Value")
+        not_blank_check_responses = not_blank_value(con_blank_check, Varid, anskey)
+        dfs.append(not_blank_check_responses)
+
+    if "!=" in operators or "!!=" in operators:
+        con_not_check = condition_df.filter(col("Operator") == "!=").select("VarID", "AnswerKey", "QuestionPrimaryKey", "Value")
+        not_equal_check_responses = not_equal_check(con_not_check, Varid, anskey)
+        dfs.append(not_equal_check_responses)
+
+    if ">" in operators:
+        con_greater = condition_df.filter(col("Operator") == ">").filter(col("ValueType") == "count") \
+            .withColumn("Value", col("Value").cast(IntegerType())) \
+            .select("VarID", "AnswerKey", "QuestionPrimaryKey", "Value")
+        greater_check_responses = greater_check(con_greater, Varid, anskey)
+        dfs.append(greater_check_responses)
+
+    if "<" in operators:
+        con_less = condition_df.filter(col("Operator") == "<").filter(col("ValueType") == "count") \
+            .withColumn("Value", col("Value").cast(IntegerType())) \
+            .select("VarID", "AnswerKey", "QuestionPrimaryKey", "Value")
+        less_check_responses = less_check(con_less, Varid, anskey)
+        dfs.append(less_check_responses)
+
+    if "=" in operators:
+        con_equal = condition_df.filter(col("Operator") == "=") \
+            .select("VarID", "AnswerKey", "QuestionPrimaryKey", "Value", "ValueType")
+        flag = con_equal.filter(col("ValueType") == "count").count() > 0
+        flag1 = con_equal.filter(col("ValueType") == "count").filter(col("Value") > 1).count() > 0
+        equalsto_check_reponses = equal_value_check(con_equal, Varid, anskey, flag, flag1)
+        dfs.append(equalsto_check_reponses)
+
+    union_df = dfs[0]
+    for i in range(1, len(dfs)):
+        union_df = union_df.unionAll(dfs[i])
+
+    res_id = union_df.groupby("ResponseID").count().filter(col("count") == op_Count) \
+        .withColumn("VarID", lit(Varid)).withColumn("AnswerKey", lit(anskey)).select("VarID", "AnswerKey", "ResponseID")
+
+    if merged_df is None:
+        merged_df = res_id
+    else:
+        merged_df = merged_df.union(res_id)
+
+# Show the resulting DataFrame
+merged_df.show()
